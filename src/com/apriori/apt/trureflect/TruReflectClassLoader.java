@@ -65,7 +65,7 @@ import org.objectweb.asm.util.TraceClassVisitor;
 class TruReflectClassLoader extends ClassLoader {
    
    // We have to reflectively construct packages because ClassLoader provides no other API for
-   // defining packages that could be also defined by a ClassLoader.
+   // defining packages that could also be defined by a parent ClassLoader.
    private static final Constructor<Package> PACKAGE_CTOR;
    static {
       try {
