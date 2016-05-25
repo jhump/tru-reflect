@@ -1,4 +1,4 @@
-package com.apriori.apt.trureflect;
+package com.bluegosling.apt.trureflect;
 
 import static java.lang.reflect.Modifier.*;
 
@@ -41,6 +41,8 @@ import javax.tools.JavaFileObject;
 import javax.tools.ToolProvider;
 
 import org.junit.Test;
+
+import com.bluegosling.apt.trureflect.TruReflect;
 
 public class TruReflectTest {
 

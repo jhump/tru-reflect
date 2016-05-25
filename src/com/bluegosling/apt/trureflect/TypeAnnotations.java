@@ -1,4 +1,4 @@
-package com.apriori.apt.trureflect;
+package com.bluegosling.apt.trureflect;
 
 import java.util.ArrayDeque;
 import java.util.function.Consumer;
@@ -19,7 +19,7 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.TypePath;
 import org.objectweb.asm.TypeReference;
 
-import com.apriori.apt.trureflect.TypePathBuilder.PathElement;
+import com.bluegosling.apt.trureflect.TypePathBuilder.PathElement;
 
 public class TypeAnnotations {
    
