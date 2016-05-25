@@ -1,4 +1,4 @@
-package com.apriori.apt.trureflect;
+package com.bluegosling.apt.trureflect;
 
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;

@@ -1,4 +1,4 @@
-package com.apriori.apt.trureflect;
+package com.bluegosling.apt.trureflect;
 
 import java.util.ArrayList;
 import java.util.List;
