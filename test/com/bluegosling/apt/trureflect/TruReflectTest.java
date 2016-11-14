@@ -331,7 +331,7 @@ public class TruReflectTest {
          System.out.print("strictfp ");
       }
       if (isSynchronized(mods)) {
-         System.out.print("syncronized ");
+         System.out.print("synchronized ");
       }
       if (isTransient(mods)) {
          System.out.print("transient ");

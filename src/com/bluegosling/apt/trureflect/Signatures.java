@@ -20,7 +20,13 @@ import javax.lang.model.util.Types;
 import org.objectweb.asm.signature.SignatureVisitor;
 import org.objectweb.asm.signature.SignatureWriter;
 
-// TODO: javadoc, tests
+/**
+ * Conveys generic signatures, from elements and type mirrors, to generated constructs, via ASM
+ * visitors.
+ * 
+ * @author Joshua Humphries (jhumphries131@gmail.com)
+ */
+// TODO: tests
 public class Signatures {
    
    private final TypeMirror javaLangObject;
@@ -164,6 +170,24 @@ public class Signatures {
       }, null);
    }
 
+   static final SimpleTypeVisitor8<DeclaredType, Void> EXTRACT_DECLARED_TYPE =
+         new SimpleTypeVisitor8<DeclaredType, Void>() {
+            @Override
+            public DeclaredType visitDeclared(DeclaredType t, Void v) {
+               return t;
+            }
+            
+            @Override
+            public DeclaredType visitNoType(NoType t, Void p) {
+               return null;
+            }
+
+            @Override
+            public DeclaredType defaultAction(TypeMirror t, Void p) {
+               throw new IllegalStateException("Unexpected type encountered: " + t.getKind());
+            }
+         };
+
    /**
     * Records a declared type using the specified visitor. A declared type is a class reference,
     * either "raw" (i.e. {@code Class}) or parameterized (i.e. {@code ParameterizedType}). If the
@@ -177,22 +201,7 @@ public class Signatures {
       ArrayDeque<DeclaredType> outerClasses = new ArrayDeque<>();
       while (type != null) {
          outerClasses.push(type);
-         type = type.getEnclosingType().accept(new SimpleTypeVisitor8<DeclaredType, Void>() {
-            @Override
-            public DeclaredType visitDeclared(DeclaredType t, Void p) {
-               return t;
-            }
-
-            @Override
-            public DeclaredType visitNoType(NoType t, Void p) {
-               return null;
-            }
-
-            @Override
-            public DeclaredType defaultAction(TypeMirror t, Void p) {
-               throw new IllegalStateException("Unexpected type encountered: " + t.getKind());
-            }
-         }, null);
+         type = type.getEnclosingType().accept(EXTRACT_DECLARED_TYPE, null);
       }
       boolean outerMost = true;
       while (!outerClasses.isEmpty()) {
