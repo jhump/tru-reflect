@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
@@ -67,8 +68,7 @@ import javax.lang.model.util.Types;
 // TODO: javadoc, tests
 public final class TruReflect {
 
-   private final Elements elementUtils;
-   private final Types typeUtils;
+   private final Environment env;
    private final TruReflectClassLoader loader;
    
    /**
@@ -77,10 +77,18 @@ public final class TruReflect {
     * @param elementUtils element utilities for the current processing environment
     * @param typeUtils type mirror utilities for the current processing environment
     */
+   public TruReflect(ProcessingEnvironment env) {
+      this(new Environment(env));
+   }
+   
+
    public TruReflect(Elements elementUtils, Types typeUtils) {
-      this.elementUtils = elementUtils;
-      this.typeUtils = typeUtils;
-      loader = new TruReflectClassLoader(elementUtils, typeUtils);
+      this(new Environment(elementUtils, typeUtils));
+   }
+   
+   public TruReflect(Environment env) {
+      this.env = env;
+      loader = new TruReflectClassLoader(env);
    }
 
    /**
@@ -283,6 +291,47 @@ public final class TruReflect {
       }
    }
 
+   private final SimpleElementVisitor8<AnnotatedElement, Void> elementVisitor =
+         new SimpleElementVisitor8<AnnotatedElement, Void>() {
+            @Override
+            public AnnotatedElement visitPackage(PackageElement e, Void p) {
+               return forElement(e);
+            }
+      
+            @Override
+            public AnnotatedElement visitType(TypeElement e, Void p) {
+               return forElement(e);
+            }
+      
+            @Override
+            public AnnotatedElement visitVariable(VariableElement e, Void p) {
+               if (e.getKind().isField()) {
+                  return forFieldElement(e);
+               } else if (e.getKind() == ElementKind.PARAMETER) {
+                  return forParameterElement(e);
+               } else {
+                  throw new IllegalArgumentException(
+                        "Cannot represent " + e.getKind() + " element via reflection");
+               }
+            }
+      
+            @Override
+            public AnnotatedElement visitExecutable(ExecutableElement e, Void p) {
+               return forElement(e);
+            }
+      
+            @Override
+            public AnnotatedElement visitTypeParameter(TypeParameterElement e, Void p) {
+               return forElement(e);
+            }
+            
+            @Override
+            public AnnotatedElement defaultAction(Element e, Void p) {
+               throw new IllegalArgumentException(
+                     "Cannot represent " + e.getKind() + " element via reflection");
+            }
+         };
+   
    /**
     * Returns a reflective object for the given element. This will return a class token, type
     * variable, package, method, constructor, field, or parameter, depending on the actual type of
@@ -304,45 +353,7 @@ public final class TruReflect {
     *       type
     */
    public AnnotatedElement forElement(Element element) {
-      return element.accept(new SimpleElementVisitor8<AnnotatedElement, Void>() {
-         @Override
-         public AnnotatedElement visitPackage(PackageElement e, Void p) {
-            return forElement(e);
-         }
- 
-         @Override
-         public AnnotatedElement visitType(TypeElement e, Void p) {
-            return forElement(e);
-         }
-
-         @Override
-         public AnnotatedElement visitVariable(VariableElement e, Void p) {
-            if (e.getKind().isField()) {
-               return forFieldElement(e);
-            } else if (e.getKind() == ElementKind.PARAMETER) {
-               return forParameterElement(e);
-            } else {
-               throw new IllegalArgumentException(
-                     "Cannot represent " + e.getKind() + " element via reflection");
-            }
-         }
-
-         @Override
-         public AnnotatedElement visitExecutable(ExecutableElement e, Void p) {
-            return forElement(e);
-         }
-
-         @Override
-         public AnnotatedElement visitTypeParameter(TypeParameterElement e, Void p) {
-            return forElement(e);
-         }
-         
-         @Override
-         public AnnotatedElement defaultAction(Element e, Void p) {
-            throw new IllegalArgumentException(
-                  "Cannot represent " + e.getKind() + " element via reflection");
-         }
-      }, null);
+      return element.accept(elementVisitor, null);
    }
 
    public Class<?> forTypeMirror(PrimitiveType type) {
@@ -370,7 +381,7 @@ public final class TruReflect {
    }
 
    public TypeVariable<?> forTypeMirror(javax.lang.model.type.TypeVariable type) {
-      return forElement((TypeParameterElement) typeUtils.asElement(type));
+      return forElement((TypeParameterElement) env.typeUtils().asElement(type));
    }
 
    public WildcardType forTypeMirror(javax.lang.model.type.WildcardType type) {
@@ -454,50 +465,53 @@ public final class TruReflect {
                // TODO: hashCode, equals, toString
             };
    }
+   
+   private final SimpleTypeVisitor8<Type, Void> typeMirrorVisitor =
+         new SimpleTypeVisitor8<Type, Void>() {
+            @Override
+            public Type visitPrimitive(PrimitiveType t, Void p) {
+               return forTypeMirror(t);
+            }
+      
+            @Override
+            public Type visitArray(ArrayType t, Void p) {
+               return forArrayType(t);
+            }
+      
+            @Override
+            public Type visitDeclared(DeclaredType t, Void p) {
+               return forDeclaredType(t);
+            }
+      
+            @Override
+            public Type visitTypeVariable(javax.lang.model.type.TypeVariable t, Void p) {
+               return forTypeMirror(t);
+            }
+      
+            @Override
+            public Type visitWildcard(javax.lang.model.type.WildcardType t, Void p) {
+               return forTypeMirror(t);
+            }
+      
+            @Override
+            public Type visitNoType(NoType t, Void p) {
+               return t.getKind() == TypeKind.VOID ? void.class : defaultAction(t, p);
+            }
+      
+            @Override
+            public Type defaultAction(TypeMirror t, Void p) {
+               throw new IllegalArgumentException(
+                     "Cannot represent " + t.getKind() + " type mirror via reflection");
+            }
+         };
 
    public Type forTypeMirror(TypeMirror type) {
-      return type.accept(new SimpleTypeVisitor8<Type, Void>() {
-         @Override
-         public Type visitPrimitive(PrimitiveType t, Void p) {
-            return forTypeMirror(t);
-         }
-
-         @Override
-         public Type visitArray(ArrayType t, Void p) {
-            return forArrayType(t);
-         }
-
-         @Override
-         public Type visitDeclared(DeclaredType t, Void p) {
-            return forDeclaredType(t);
-         }
-
-         @Override
-         public Type visitTypeVariable(javax.lang.model.type.TypeVariable t, Void p) {
-            return forTypeMirror(t);
-         }
-
-         @Override
-         public Type visitWildcard(javax.lang.model.type.WildcardType t, Void p) {
-            return forTypeMirror(t);
-         }
-
-         @Override
-         public Type visitNoType(NoType t, Void p) {
-            return t.getKind() == TypeKind.VOID ? void.class : defaultAction(t, p);
-         }
-
-         @Override
-         public Type defaultAction(TypeMirror t, Void p) {
-            throw new IllegalArgumentException(
-                  "Cannot represent " + t.getKind() + " type mirror via reflection");
-         }
-      }, null);
+      return type.accept(typeMirrorVisitor, null);
    }
 
    public Annotation forAnnotationMirror(AnnotationMirror annotation) {
       Map<? extends ExecutableElement, ? extends AnnotationValue> mirrorValues =
-            elementUtils.getElementValuesWithDefaults(annotation);
+            env.elementUtils().getElementValuesWithDefaults(annotation);
       Map<String, Object> annotationValues = new HashMap<>((mirrorValues.size() + 1) * 4 / 3);
       for (Entry<? extends ExecutableElement, ? extends AnnotationValue> entry
             : mirrorValues.entrySet()) {
@@ -536,81 +550,85 @@ public final class TruReflect {
    public Object forAnnotationValue(AnnotationValue value) {
       return forAnnotationValue(value, null);
    }
+   
+   private final SimpleAnnotationValueVisitor8<Object, ExecutableElement> annotationValueVisitor =
+         new SimpleAnnotationValueVisitor8<Object, ExecutableElement>() {
+            @Override
+            protected Object defaultAction(Object o, ExecutableElement method) {
+               return o;
+            }
+      
+            @Override
+            public Object visitType(TypeMirror t, ExecutableElement method) {
+               return (Class<?>) forTypeMirror(t);
+            }
+      
+            @Override
+            public Object visitEnumConstant(VariableElement c, ExecutableElement method) {
+               Field f = forFieldElement(c);
+               f.setAccessible(true);
+               try {
+                  return f.get(null);
+               } catch (NullPointerException | IllegalArgumentException | IllegalAccessException e) {
+                  throw new AssertionError("Could not get enum constant value", e);
+               }
+            }
+      
+            @Override
+            public Object visitAnnotation(AnnotationMirror a, ExecutableElement method) {
+               return forAnnotationMirror(a);
+            }
+      
+            @Override
+            public Object visitArray(List<? extends AnnotationValue> vals,
+                  ExecutableElement method) {
+               Object array;
+               if (method != null) {
+                  array = Array.newInstance(getMethodReturnComponentType(method), vals.size());
+               } else {
+                  array = null;
+               }
+               int i = 0;
+               for (AnnotationValue val : vals) {
+                  Object v = forAnnotationValue(val);
+                  if (array == null) {
+                     array = Array.newInstance(getValueType(v), vals.size());
+                  }
+                  Array.set(array, i++, v);
+               }
+               return array != null ? array : new Object[0];
+            }
+            
+            private Class<?> getMethodReturnComponentType(ExecutableElement method) {
+               assert method.getReturnType().getKind() == TypeKind.ARRAY;
+               return rawType(forTypeMirror(((ArrayType) method.getReturnType()).getComponentType()));
+            }
+            
+            private Class<?> getValueType(Object v) {
+               if (v instanceof Boolean) {
+                  return boolean.class;
+               } else if (v instanceof Byte) {
+                  return byte.class;
+               } else if (v instanceof Character) {
+                  return char.class;
+               } else if (v instanceof Short) {
+                  return short.class;
+               } else if (v instanceof Integer) {
+                  return int.class;
+               } else if (v instanceof Long) {
+                  return long.class;
+               } else if (v instanceof Float) {
+                  return float.class;
+               } else if (v instanceof Double) {
+                  return double.class;
+               } else {
+                  assert v instanceof Class || v instanceof Annotation || v.getClass().isArray();
+                  return v.getClass();
+               }
+            }
+         };
 
    public Object forAnnotationValue(AnnotationValue value, ExecutableElement method) {
-      return value.accept(new SimpleAnnotationValueVisitor8<Object, Void>() {
-         @Override
-         protected Object defaultAction(Object o, Void p) {
-            return o;
-         }
-
-         @Override
-         public Object visitType(TypeMirror t, Void p) {
-            return (Class<?>) forTypeMirror(t);
-         }
-
-         @Override
-         public Object visitEnumConstant(VariableElement c, Void p) {
-            Field f = forFieldElement(c);
-            f.setAccessible(true);
-            try {
-               return f.get(null);
-            } catch (NullPointerException | IllegalArgumentException | IllegalAccessException e) {
-               throw new AssertionError("Could not get enum constant value", e);
-            }
-         }
-
-         @Override
-         public Object visitAnnotation(AnnotationMirror a, Void p) {
-            return forAnnotationMirror(a);
-         }
-
-         @Override
-         public Object visitArray(List<? extends AnnotationValue> vals, Void p) {
-            Object array;
-            if (method != null) {
-               array = Array.newInstance(getMethodReturnComponentType(method), vals.size());
-            } else {
-               array = null;
-            }
-            int i = 0;
-            for (AnnotationValue val : vals) {
-               Object v = forAnnotationValue(val);
-               if (array == null) {
-                  array = Array.newInstance(getValueType(v), vals.size());
-               }
-               Array.set(array, i++, v);
-            }
-            return array != null ? array : new Object[0];
-         }
-         
-         private Class<?> getMethodReturnComponentType(ExecutableElement method) {
-            assert method.getReturnType().getKind() == TypeKind.ARRAY;
-            return rawType(forTypeMirror(((ArrayType) method.getReturnType()).getComponentType()));
-         }
-         
-         private Class<?> getValueType(Object v) {
-            if (v instanceof Boolean) {
-               return boolean.class;
-            } else if (v instanceof Byte) {
-               return byte.class;
-            } else if (v instanceof Character) {
-               return char.class;
-            } else if (v instanceof Short) {
-               return short.class;
-            } else if (v instanceof Integer) {
-               return int.class;
-            } else if (v instanceof Long) {
-               return long.class;
-            } else if (v instanceof Float) {
-               return float.class;
-            } else if (v instanceof Double) {
-               return double.class;
-            } else {
-               assert v instanceof Class || v instanceof Annotation || v.getClass().isArray();
-               return v.getClass();
-            }
-         }
-      }, null);
+      return value.accept(annotationValueVisitor, method);
    }
 }

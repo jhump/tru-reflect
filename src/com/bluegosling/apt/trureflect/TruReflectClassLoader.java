@@ -14,7 +14,6 @@ import java.lang.reflect.AnnotatedType;
 import java.lang.reflect.AnnotatedTypeVariable;
 import java.lang.reflect.AnnotatedWildcardType;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Parameter;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -47,9 +46,7 @@ import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementKindVisitor8;
-import javax.lang.model.util.Elements;
 import javax.lang.model.util.SimpleElementVisitor8;
-import javax.lang.model.util.Types;
 
 import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.ClassReader;
@@ -62,6 +59,16 @@ import org.objectweb.asm.TypePath;
 import org.objectweb.asm.util.ASMifier;
 import org.objectweb.asm.util.TraceClassVisitor;
 
+/**
+ * A class loader that generates classes based on the elements available in the current processing
+ * environment. The classes simply reflect the shape and types of the source elements and do not
+ * contain any implementation logic. If an attempt is made to instantiate any of the generated
+ * classes or invoke any methods, an {@link UnsupportedOperationException} is thrown.
+ * 
+ * @see TruReflect
+ * 
+ * @author Joshua Humphries (jhumphries131@gmail.com)
+ */
 class TruReflectClassLoader extends ClassLoader {
    
    // We have to reflectively construct packages because ClassLoader provides no other API for
@@ -86,21 +93,10 @@ class TruReflectClassLoader extends ClassLoader {
    private final Map<TypeElement, String> classNamesByElement = new HashMap<>(); 
    private final Map<String, PackageElement> packageElements = new HashMap<>();
    private final Map<String, Package> packages = new HashMap<>();
-   private final Elements elementUtils;
-   private final Types typeUtils;
-   private final TypeNames typeNameUtils;
-   private final Signatures signatureUtils;
-   private final Annotations annotationUtils;
-   private final TypeAnnotations typeAnnotationUtils;
+   private final Environment env;
    
-   TruReflectClassLoader(Elements elementUtils, Types typeUtils) {
-      this.elementUtils = elementUtils;
-      this.typeUtils = typeUtils;
-      this.typeNameUtils = new TypeNames(elementUtils, typeUtils);
-      this.signatureUtils = new Signatures(
-            elementUtils.getTypeElement("java.lang.Object").asType(), typeUtils, typeNameUtils);
-      this.annotationUtils = new Annotations(elementUtils, typeNameUtils);
-      this.typeAnnotationUtils = new TypeAnnotations(elementUtils, typeNameUtils, annotationUtils);
+   TruReflectClassLoader(Environment env) {
+      this.env = env;
    }
    
    @Override protected synchronized Class<?> loadClass(String name, boolean resolve)
@@ -147,7 +143,7 @@ class TruReflectClassLoader extends ClassLoader {
    }
    
    private String mapType(TypeElement e) {
-      String className = elementUtils.getBinaryName(e).toString();
+      String className = env.elementUtils().getBinaryName(e).toString();
       mapClassName(className, e);
       return className;
    }
@@ -159,7 +155,7 @@ class TruReflectClassLoader extends ClassLoader {
             null, "java/lang/Object", new String[0]);
       // Annotations
       for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
-         annotationUtils.recordAnnotation(writer, mirror);
+         env.annotationUtils().recordAnnotation(writer, mirror);
       }
       writer.visitEnd();
       return writer.toByteArray();
@@ -168,13 +164,13 @@ class TruReflectClassLoader extends ClassLoader {
    private byte[] createClass(String name, TypeElement element) {
       // TODO: refactor this behemoth!!!
       
-      PackageElement pkg = elementUtils.getPackageOf(element);
+      PackageElement pkg = env.elementUtils().getPackageOf(element);
       ensurePackageDefined(pkg.getQualifiedName().toString(), pkg);
       ClassWriter writer = new ClassWriter(0);
       boolean isInterface = element.getKind().isInterface();
       boolean isEnum = element.getKind() == ElementKind.ENUM;
-      String typeDescriptor = typeNameUtils.getDescriptor(element.asType());
-      String internalName = typeNameUtils.getInternalName(element);
+      String typeDescriptor = env.typeNameUtils().getDescriptor(element.asType());
+      String internalName = env.typeNameUtils().getInternalName(element);
       // Crawl elements and map all referenced types. Also records all referenced inner types and,
       // if this is an enum, records properties we need to know to possibly synthesize methods.
       Map<Integer, ExecutableElement> enumConstructors = new HashMap<>();
@@ -202,7 +198,7 @@ class TruReflectClassLoader extends ClassLoader {
          }
          
          void visitTypeMirror(TypeMirror type) {
-            Element element = typeUtils.asElement(type);
+            Element element = env.typeUtils().asElement(type);
             if (element != null) {
                element.accept(this, null);
             }
@@ -227,7 +223,7 @@ class TruReflectClassLoader extends ClassLoader {
                if (e.getKind() == ElementKind.STATIC_INIT) {
                   enumProps.hasClInit = true;  
                } else if (e.getKind() == ElementKind.CONSTRUCTOR) {
-                  String consDescriptor = typeNameUtils.getDescriptor(e);
+                  String consDescriptor = env.typeNameUtils().getDescriptor(e);
                   Matcher m = ENUM_CTOR_DESC_PATTERN.matcher(consDescriptor);
                   if (m.matches()) {
                      enumConstructors.put(m.group(1).length(), e);
@@ -235,7 +231,7 @@ class TruReflectClassLoader extends ClassLoader {
                } else if (methodName.equals("values") && e.getParameters().isEmpty()) {
                   enumProps.hasValues = true;
                } else if (methodName.equals("valueOf")
-                     && typeNameUtils.getDescriptor(e).equals("(Ljava/lang/String;)"
+                     && env.typeNameUtils().getDescriptor(e).equals("(Ljava/lang/String;)"
                            + typeDescriptor)) {
                   enumProps.hasValueOf = true;
                }
@@ -324,52 +320,52 @@ class TruReflectClassLoader extends ClassLoader {
          scanner.visitTypeMirror(iface);
       }
       TypeMirror superclass = isInterface
-            ? elementUtils.getTypeElement("java.lang.Object").asType()
+            ? env.elementUtils().getTypeElement("java.lang.Object").asType()
             : element.getSuperclass();
       List<? extends TypeMirror> interfaces = element.getInterfaces();
       writer.visit(V1_8, modifiers, internalName,
-            signatureUtils.getClassSignature(element),
-            typeNameUtils.getInternalName(superclass),
+            env.signatureUtils().getClassSignature(element),
+            env.typeNameUtils().getInternalName(superclass),
             interfaces.stream()
-                  .map(mirror -> typeNameUtils.getInternalName(mirror))
+                  .map(mirror -> env.typeNameUtils().getInternalName(mirror))
                   .toArray(sz -> new String[sz]));
       // Class Annotations
       for (AnnotationMirror mirror : element.getAnnotationMirrors()) {
-         annotationUtils.recordAnnotation(writer, mirror);
+         env.annotationUtils().recordAnnotation(writer, mirror);
          // scan annotations
          scanner.visitTypeMirror(mirror.getAnnotationType());
       }
       // Type annotations
       //  - Superclass
-      typeAnnotationUtils.recordSuperTypeAnnotations(writer, scanner::visitTypeMirror,
+      env.typeAnnotationUtils().recordSuperTypeAnnotations(writer, scanner::visitTypeMirror,
             element.getSuperclass(), -1);
       //  - Interfaces
       int i = 0;
       for (TypeMirror interfaceMirror : element.getInterfaces()) {
-         typeAnnotationUtils.recordSuperTypeAnnotations(writer, scanner::visitTypeMirror,
+         env.typeAnnotationUtils().recordSuperTypeAnnotations(writer, scanner::visitTypeMirror,
                interfaceMirror, i++);
       }
       //  - Type variables and bounds
       i = 0;
       for (TypeParameterElement typeVar : element.getTypeParameters()) {
-         typeAnnotationUtils.recordClassTypeParameterAnnotations(writer, scanner::visitTypeMirror,
-               typeVar, i++);
+         env.typeAnnotationUtils().recordClassTypeParameterAnnotations(writer,
+               scanner::visitTypeMirror, typeVar, i++);
       }
       // Outer Class Info
       Element enclosing = element.getEnclosingElement();
       enclosing.accept(new SimpleElementVisitor8<Void, Void>() {
          @Override
          public Void visitType(TypeElement element, Void p) {
-            writer.visitOuterClass(typeNameUtils.getInternalName(element), null, null);
+            writer.visitOuterClass(env.typeNameUtils().getInternalName(element), null, null);
             return null;
          }
          
          @Override
          public Void visitExecutable(ExecutableElement element, Void p) {
             writer.visitOuterClass(
-                  typeNameUtils.getInternalName((TypeElement) element.getEnclosingElement()),
+                  env.typeNameUtils().getInternalName((TypeElement) element.getEnclosingElement()),
                   element.getSimpleName().toString(),
-                  typeNameUtils.getDescriptor(element));
+                  env.typeNameUtils().getDescriptor(element));
             return null;
          }
       }, null);
@@ -391,18 +387,18 @@ class TruReflectClassLoader extends ClassLoader {
                // Field declaration
                FieldVisitor visitor = writer.visitField(access,
                      e.getSimpleName().toString(),
-                     typeNameUtils.getDescriptor(e),
-                     signatureUtils.getTypeSignature(e.asType()),
+                     env.typeNameUtils().getDescriptor(e),
+                     env.signatureUtils().getTypeSignature(e.asType()),
                      (access & ACC_STATIC) == 0 ? null : e.getConstantValue());
                // Annotations
                for (AnnotationMirror mirror : e.getAnnotationMirrors()) {
-                  annotationUtils.recordAnnotation(visitor, mirror);
+                  env.annotationUtils().recordAnnotation(visitor, mirror);
                   // scan field annotations
                   scanner.visitTypeMirror(mirror.getAnnotationType());
                }
                // Type Annotations
-               typeAnnotationUtils.recordFieldTypeAnnotations(visitor, scanner::visitTypeMirror,
-                     e.asType());
+               env.typeAnnotationUtils().recordFieldTypeAnnotations(visitor,
+                     scanner::visitTypeMirror, e.asType());
                visitor.visitEnd();
                return null;
             }
@@ -431,22 +427,22 @@ class TruReflectClassLoader extends ClassLoader {
                      break;
                }
                MethodVisitor visitor = writer.visitMethod(access, methodName,
-                     typeNameUtils.getDescriptor(e),
-                     signatureUtils.getMethodSignature(e),
+                     env.typeNameUtils().getDescriptor(e),
+                     env.signatureUtils().getMethodSignature(e),
                      e.getThrownTypes().stream()
-                        .map(mirror -> typeNameUtils.getInternalName(mirror))
+                        .map(mirror -> env.typeNameUtils().getInternalName(mirror))
                         .toArray(sz -> new String[sz]));
                // Default values for annotation methods
                AnnotationValue defaultValue = e.getDefaultValue();
                if (defaultValue != null) {
                   assert element.getKind() == ElementKind.ANNOTATION_TYPE;
                   AnnotationVisitor av = visitor.visitAnnotationDefault();
-                  annotationUtils.recordAnnotationValue(av, "", defaultValue);
+                  env.annotationUtils().recordAnnotationValue(av, "", defaultValue);
                   av.visitEnd();
                }
                // Annotations
                for (AnnotationMirror mirror : e.getAnnotationMirrors()) {
-                  annotationUtils.recordAnnotation(visitor, mirror);
+                  env.annotationUtils().recordAnnotation(visitor, mirror);
                   // scan method annotations
                   scanner.visitTypeMirror(mirror.getAnnotationType());
                }
@@ -456,7 +452,7 @@ class TruReflectClassLoader extends ClassLoader {
                   visitor.visitParameter(param.getSimpleName().toString(),
                         computeModifierFlags(param.getModifiers()));
                   for (AnnotationMirror mirror : param.getAnnotationMirrors()) {
-                     annotationUtils.recordParameterAnnotation(visitor, i, mirror);
+                     env.annotationUtils().recordParameterAnnotation(visitor, i, mirror);
                   }
                   i++;
                }
@@ -464,31 +460,31 @@ class TruReflectClassLoader extends ClassLoader {
                //  - Type variables and bounds
                i = 0;
                for (TypeParameterElement typeVar : e.getTypeParameters()) {
-                  typeAnnotationUtils.recordMethodTypeParameterAnnotations(visitor,
+                  env.typeAnnotationUtils().recordMethodTypeParameterAnnotations(visitor,
                         scanner::visitTypeMirror, typeVar, i++);
                }
                //  - Receiver type annotations
                TypeMirror receiverType = e.getReceiverType();
                if (receiverType != null && receiverType.getKind() != TypeKind.NONE) {
-                  typeAnnotationUtils.recordReceiverTypeAnnotations(visitor,
+                  env.typeAnnotationUtils().recordReceiverTypeAnnotations(visitor,
                         scanner::visitTypeMirror, receiverType);
                }
                //  - Return type annotations
                TypeMirror returnType = e.getReturnType();
                if (returnType.getKind() != TypeKind.VOID) {
-                  typeAnnotationUtils.recordReturnTypeAnnotations(visitor,
+                  env.typeAnnotationUtils().recordReturnTypeAnnotations(visitor,
                         scanner::visitTypeMirror, returnType);
                }
                //  - Parameter type annotations
                i = 0;
                for (VariableElement param : e.getParameters()) {
-                  typeAnnotationUtils.recordParameterTypeAnnotations(visitor,
+                  env.typeAnnotationUtils().recordParameterTypeAnnotations(visitor,
                         scanner::visitTypeMirror, param.asType(), i++);
                }
                //  - Throws type annotations
                i = 0;
                for (TypeMirror thrownType : e.getThrownTypes()) {
-                  typeAnnotationUtils.recordExceptionTypeAnnotations(visitor,
+                  env.typeAnnotationUtils().recordExceptionTypeAnnotations(visitor,
                         scanner::visitTypeMirror, thrownType, i++);
                }
                // Code / Method body
@@ -501,19 +497,19 @@ class TruReflectClassLoader extends ClassLoader {
                               typeDescriptor, enumProps.numParametersForUsableConstructor);
                         writeDefaultImpl = false;
                      } else if (methodName.equals("<init>")
-                           && typeNameUtils.getDescriptor(e).equals("(Ljava/lang/String;I)V")) {
+                           && env.typeNameUtils().getDescriptor(e).equals("(Ljava/lang/String;I)V")) {
                         // TODO: generate method body for visible constructor w/ different signature
                         // if needed by concrete sub-class
                         writeEnumBaseConstructorImplementation(visitor,
                               getParameterNames(e.getParameters()), typeDescriptor);
                         writeDefaultImpl = false;
                      } else if (methodName.equals("values") &&
-                           typeNameUtils.getDescriptor(e).equals("()[" + typeDescriptor)) {
+                           env.typeNameUtils().getDescriptor(e).equals("()[" + typeDescriptor)) {
                         writeEnumValuesImplementation(visitor, enumConstants, internalName,
                               typeDescriptor);
                         writeDefaultImpl = false;
                      } else if (methodName.equals("valueOf")
-                           && typeNameUtils.getDescriptor(e).equals("(Ljava/lang/String;)"
+                           && env.typeNameUtils().getDescriptor(e).equals("(Ljava/lang/String;)"
                                  + typeDescriptor)) {
                         assert e.getParameters().size() == 1;
                         writeEnumValueOfImplementation(visitor,
@@ -599,7 +595,7 @@ class TruReflectClassLoader extends ClassLoader {
          }
          assert outerClass != null;
          writer.visitInnerClass(innerClassInternalName,
-               typeNameUtils.getInternalName(outerClass),
+               env.typeNameUtils().getInternalName(outerClass),
                innerClass.getSimpleName().toString(),
                computeModifierFlags(innerClass.getModifiers()));
       }
@@ -769,7 +765,7 @@ class TruReflectClassLoader extends ClassLoader {
       int i = offset;
       for (VariableElement param : parameters) {
          mv.visitLocalVariable(param.getSimpleName().toString(),
-               typeNameUtils.getDescriptor(param.asType()), null, scopeEnter, scopeExit, i++);
+               env.typeNameUtils().getDescriptor(param.asType()), null, scopeEnter, scopeExit, i++);
       }
       mv.visitMaxs(2, parameters.size() + offset);
    }
@@ -804,7 +800,7 @@ class TruReflectClassLoader extends ClassLoader {
    synchronized Class<?> loadClass(TypeElement element) {
       String className = classNamesByElement.get(element);
       if (className == null) {
-         className = elementUtils.getBinaryName(element).toString();
+         className = env.elementUtils().getBinaryName(element).toString();
          mapClassName(className, element);
       }
       assert element.equals(typeElements.get(className));
@@ -863,6 +859,8 @@ class TruReflectClassLoader extends ClassLoader {
       packages.put(name, p);
       return p;
    }
+   
+   
 
    
    
